@@ -1,0 +1,163 @@
+#!/usr/bin/perl
+#   $Id$
+# 
+#   File:		banban
+#   Date:		01 Jun 2013 16:40:52
+#   Author:		Alexander Zangerl <az@snafu.priv.at>
+# 
+#   Abstract:
+#	slimmed down but brighter fail2ban
+#
+use strict;
+use File::Tail;
+use Data::Dumper;
+use YAML::Tiny;
+use Getopt::Std;
+use POSIX;
+use Sys::Syslog;
+use Proc::PID::File;
+use File::Basename;
+
+my $cffile="/etc/banban.yml";
+my $facility="local2";
+my %opts;
+
+getopts("f",\%opts) or die "usage: $0 [-f]\n-f: foreground and debug info\n";
+my ($config)=YAML::Tiny::LoadFile($cffile) or die "can't open $cffile: $!\n";
+
+my @crebad=map qr/$_/, @{$config->{badpatterns}};
+my @cregood=map qr/$_/, @{$config->{goodpatterns}};
+my %mnames=(Jan=>0,Feb=>1,Mar=>2,Apr=>3,May=>4,Jun=>5,Jul=>6,Aug=>7,Sep=>8,Oct=>9,Nov=>10,Dec=>11);
+my %offenders;			# key ip, value list of occurrences
+
+
+if (!$opts{f})
+{
+    openlog(basename($0),"pid",$facility);
+    chdir '/' or die "Can't chdir to /: $!";
+    open STDIN, '/dev/null'  or die "Can't read /dev/null: $!";
+    open STDOUT, '>/dev/null' or die "Can't write to /dev/null: $!";
+    
+    $SIG{__DIE__}=sub { die @_ if $^S; syslog("crit",$_[0]."\n"); };
+
+    defined(my $pid = fork) or die "Can't fork: $!";
+    exit if $pid;
+
+    die basename($0)." already running, exiting!\n" 
+	if (Proc::PID::File->running());
+
+    syslog("info","starting to tail ".join(" ",@{$config->{logfiles}}));
+}
+	   
+# open all logfiles for tailing
+my @tails=map File::Tail->new(name=>$_),@{$config->{logfiles}};
+
+while (1)
+{
+    my ($nready,$timeleft,@mustread)=File::Tail::select(undef,undef,undef,5,@tails);
+    next if (!$nready);
+
+    my $thisyear=(localtime(time))[5];
+    for my $fh (@mustread)
+    {
+	READLOOP: for my $ll ($fh->read)
+	{
+	    chomp $ll;
+	    my ($month,$day,$time,$servername,$line)=split(/\s+/,$ll,5);
+	    my @tcomps=split(/:/,$time);
+	    if (!$month || !$day || !$time || !@tcomps)
+	    {
+		logit("ignoring dud line \"$ll\"");
+		next READLOOP;
+	    }
+	    # look for unblock-worthy behaviour
+	    for my $re (@cregood)
+	    {
+		if ($line =~ $re)
+		{
+		    my $ip=$+{ip};
+		    next READLOOP if (ignoreip($ip));
+		    logit("unblocking ip $ip");
+		    blockunblock($ip,0);
+		    delete $offenders{$ip};
+		    next READLOOP;
+		}
+	    }
+	    # check for offenders (expect named capture group 'ip')
+	    for my $re (@crebad)
+	    {
+		if ($line =~ $re)
+		{
+		    my $ip=$+{ip};
+		    next READLOOP if (ignoreip($ip));
+
+		    my $when=POSIX::mktime((reverse @tcomps),$day,$mnames{$month},$thisyear);
+		    # print "bad pattern for ip $ip on line \"$line\", at time $when\n";
+
+		    $offenders{$ip}||=[];
+		    push @{$offenders{$ip}},$when;
+
+		    my $cutoff=time-$config->{interval};
+		    my $countbad=scalar grep($_>$cutoff,@{$offenders{$ip}});
+		    if ($countbad>=$config->{minocc})
+		    {
+			logit("ip $ip has offended $countbad times, blocking");
+			blockunblock($ip,1);
+		    }
+		    # limit mem growth, keep only last three times minimum hits in history
+		    my $maxhits=$config->{minocc}*3;
+		    if (@{$offenders{$ip}}>$maxhits)
+		    {
+			$offenders{$ip}=[@{$offenders{$ip}}[-$maxhits..-1]];
+		    }
+		    next READLOOP;
+		}
+	    }
+	}
+    }
+}
+exit (0);
+
+# action 0 -> unblock, 1 -> block
+sub blockunblock
+{
+    my ($ip,$action)=@_;
+    my $tfn="/proc/net/xt_recent/".$config->{target};
+    open(F,">$tfn") or die "can't open $tfn: $!\n";
+    print F ($action?"+":"-").$ip."\n";
+    close(F);
+}
+
+# returns 1 if ip is in ignorenets
+sub ignoreip
+{
+    my ($ip)=@_;
+    return 0 if (!$config->{ignorenets});
+
+    my @digits=split(/\./,$ip);
+    my $intip=$digits[0]*(1<<24)+$digits[1]*(1<<16)
+	+$digits[2]*(1<<8)+$digits[3];
+
+    for my $netspec (@{$config->{ignorenets}})
+    {
+	my ($net,$len)=split(m!/!,$netspec);
+	@digits=split(/\./,$net);
+	my $intmask=(0xffffffff<<(32-$len))&0xffffffff;
+	my $intnet=($digits[0]*(1<<24)+$digits[1]*(1<<16)
+		    +$digits[2]*(1<<8)+$digits[3])&$intmask;
+	return 1 if (($intip&$intmask) == $intnet);
+    }
+}
+
+sub logit
+{
+    my ($msg)=@_;
+    if (!$opts{f})
+    {
+	syslog("info",$msg);
+    }
+    else
+    {
+	print STDERR $msg,"\n";
+    }
+}
