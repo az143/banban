@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-#   $Id$
+#   $Id: banban,v 1.1 2013/06/05 02:43:23 az Exp az $
 # 
 #   File:		banban
 #   Date:		01 Jun 2013 16:40:52
@@ -126,6 +126,12 @@ sub blockunblock
     open(F,">$tfn") or die "can't open $tfn: $!\n";
     print F ($action?"+":"-").$ip."\n";
     close(F);
+
+    # also nix any existing connections
+    if ($action)
+    {
+	system("/usr/sbin/conntrack","-D","-s",$ip);
+    }
 }
 
 # returns 1 if ip is in ignorenets
