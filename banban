@@ -1,12 +1,12 @@
 #!/usr/bin/perl
-#   $Id: banban,v 1.1 2013/06/05 02:43:23 az Exp az $
+#   $Id: banban,v 1.2 2013/06/05 09:01:36 az Exp az $
 # 
 #   File:		banban
 #   Date:		01 Jun 2013 16:40:52
 #   Author:		Alexander Zangerl <az@snafu.priv.at>
 # 
 #   Abstract:
-#	slimmed down but brighter fail2ban
+#	slimmed down but slightly brighter variation of fail2ban
 #
 use strict;
 use File::Tail;
@@ -22,11 +22,19 @@ my $cffile="/etc/banban.yml";
 my $facility="local2";
 my %opts;
 
-getopts("f",\%opts) or die "usage: $0 [-f]\n-f: foreground and debug info\n";
+getopts("fs",\%opts) or die "usage: $0 [-f][-s]\n-f: foreground and debug info\n-s: simulate only\n";
 my ($config)=YAML::Tiny::LoadFile($cffile) or die "can't open $cffile: $!\n";
 
-my @crebad=map qr/$_/, @{$config->{badpatterns}};
+# compile all regexps
 my @cregood=map qr/$_/, @{$config->{goodpatterns}};
+my @alltargets;
+for my $bname (keys %{$config->{blocktypes}})
+{
+    my $thisblock=$config->{blocktypes}->{$bname};
+    $thisblock->{crebad}=[map qr/$_/, @{$thisblock->{patterns}}];
+    push @alltargets,$thisblock->{target} if (!grep($_ eq $thisblock->{target},@alltargets)); # cheap and lazy, i know
+}
+
 my %mnames=(Jan=>0,Feb=>1,Mar=>2,Apr=>3,May=>4,Jun=>5,Jul=>6,Aug=>7,Sep=>8,Oct=>9,Nov=>10,Dec=>11);
 my %offenders;			# key ip, value list of occurrences
 
@@ -70,7 +78,7 @@ while (1)
 		logit("ignoring dud line \"$ll\"");
 		next READLOOP;
 	    }
-	    # look for unblock-worthy behaviour
+	    # first look for unblock-worthy behaviour
 	    for my $re (@cregood)
 	    {
 		if ($line =~ $re)
@@ -78,39 +86,42 @@ while (1)
 		    my $ip=$+{ip};
 		    next READLOOP if (ignoreip($ip));
 		    logit("unblocking ip $ip");
-		    blockunblock($ip,0);
+		    blockunblock($ip,undef) if (!$opts{s});
 		    delete $offenders{$ip};
 		    next READLOOP;
 		}
 	    }
-	    # check for offenders (expect named capture group 'ip')
-	    for my $re (@crebad)
+	    # then check for offenses
+	    for my $bname (keys %{$config->{blocktypes}})
 	    {
-		if ($line =~ $re)
+		for my $re (@{$config->{blocktypes}->{$bname}->{crebad}})
 		{
-		    my $ip=$+{ip};
-		    next READLOOP if (ignoreip($ip));
-
-		    my $when=POSIX::mktime((reverse @tcomps),$day,$mnames{$month},$thisyear);
-		    # print "bad pattern for ip $ip on line \"$line\", at time $when\n";
-
-		    $offenders{$ip}||=[];
-		    push @{$offenders{$ip}},$when;
-
-		    my $cutoff=time-$config->{interval};
-		    my $countbad=scalar grep($_>$cutoff,@{$offenders{$ip}});
-		    if ($countbad>=$config->{minocc})
+		    if ($line =~ $re)
 		    {
-			logit("ip $ip has offended $countbad times, blocking");
-			blockunblock($ip,1);
+			my $ip=$+{ip};
+			next READLOOP if (ignoreip($ip));
+
+			my $when=POSIX::mktime((reverse @tcomps),$day,$mnames{$month},$thisyear);
+			# print "bad pattern for ip $ip on line \"$line\", at time $when\n";
+
+			$offenders{$ip}||=[];
+			push @{$offenders{$ip}},$when;
+
+			my $cutoff=time-$config->{blocktypes}->{$bname}->{interval};
+
+			my $countbad=scalar grep($_>$cutoff,@{$offenders{$ip}});
+			if ($countbad>=$config->{blocktypes}->{$bname}->{minocc})
+			{
+			    logit("ip $ip offense $countbad, blocktype $bname");
+			    blockunblock($ip,$bname) if (!$opts{s});
+			}
+			# limit mem growth, keep only last 10 hits in history
+			if (@{$offenders{$ip}}>10)
+			{
+			    $offenders{$ip}=[@{$offenders{$ip}}[-10..-1]];
+			}
+			next READLOOP;
 		    }
-		    # limit mem growth, keep only last three times minimum hits in history
-		    my $maxhits=$config->{minocc}*3;
-		    if (@{$offenders{$ip}}>$maxhits)
-		    {
-			$offenders{$ip}=[@{$offenders{$ip}}[-$maxhits..-1]];
-		    }
-		    next READLOOP;
 		}
 	    }
 	}
@@ -118,19 +129,33 @@ while (1)
 }
 exit (0);
 
-# action 0 -> unblock, 1 -> block
+# blocktype undef -> unblock, otherwise block respective list and settings
 sub blockunblock
 {
-    my ($ip,$action)=@_;
-    my $tfn="/proc/net/xt_recent/".$config->{target};
-    open(F,">$tfn") or die "can't open $tfn: $!\n";
-    print F ($action?"+":"-").$ip."\n";
-    close(F);
+    my ($ip,$btype)=@_;
 
-    # also nix any existing connections
-    if ($action)
+    if (!$btype)
     {
-	system("/usr/sbin/conntrack","-D","-s",$ip);
+	for my $tname (@alltargets)
+	{
+	    my $tfn="/proc/net/xt_recent/$tname";
+	    open(F,">$tfn") or die "can't open $tfn: $!\n";
+	    print F "-$ip\n";
+	    close(F);
+	}
+    }
+    else
+    {
+	my $tfn="/proc/net/xt_recent/".$config->{blocktypes}->{$btype}->{target};
+	open(F,">$tfn") or die "can't open $tfn: $!\n";
+	print F "+$ip\n";
+	close(F);
+
+	# also nix any existing connections if requested
+	if ($config->{blocktypes}->{$btype}->{resetconns})
+	{
+	    system("/usr/sbin/conntrack","-D","-s",$ip);
+	}
     }
 }
 
