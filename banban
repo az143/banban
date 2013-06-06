@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-#   $Id: banban,v 1.2 2013/06/05 09:01:36 az Exp az $
+#   $Id: banban,v 1.3 2013/06/06 04:54:31 az Exp az $
 # 
 #   File:		banban
 #   Date:		01 Jun 2013 16:40:52
@@ -92,7 +92,7 @@ while (1)
 		}
 	    }
 	    # then check for offenses
-	    for my $bname (keys %{$config->{blocktypes}})
+	    BLOCKTYPE: for my $bname (keys %{$config->{blocktypes}})
 	    {
 		for my $re (@{$config->{blocktypes}->{$bname}->{crebad}})
 		{
@@ -120,7 +120,7 @@ while (1)
 			{
 			    $offenders{$ip}=[@{$offenders{$ip}}[-10..-1]];
 			}
-			next READLOOP;
+			next BLOCKTYPE;
 		    }
 		}
 	    }
