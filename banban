@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-#   $Id: banban,v 1.3 2013/06/06 04:54:31 az Exp az $
+#   $Id: banban,v 1.4 2013/06/06 05:04:28 az Exp az $
 # 
 #   File:		banban
 #   Date:		01 Jun 2013 16:40:52
@@ -23,17 +23,9 @@ my $facility="local2";
 my %opts;
 
 getopts("fs",\%opts) or die "usage: $0 [-f][-s]\n-f: foreground and debug info\n-s: simulate only\n";
-my ($config)=YAML::Tiny::LoadFile($cffile) or die "can't open $cffile: $!\n";
 
-# compile all regexps
-my @cregood=map qr/$_/, @{$config->{goodpatterns}};
-my @alltargets;
-for my $bname (keys %{$config->{blocktypes}})
-{
-    my $thisblock=$config->{blocktypes}->{$bname};
-    $thisblock->{crebad}=[map qr/$_/, @{$thisblock->{patterns}}];
-    push @alltargets,$thisblock->{target} if (!grep($_ eq $thisblock->{target},@alltargets)); # cheap and lazy, i know
-}
+my ($config,@cregood,@alltargets);
+&prepconf;
 
 my %mnames=(Jan=>0,Feb=>1,Mar=>2,Apr=>3,May=>4,Jun=>5,Jul=>6,Aug=>7,Sep=>8,Oct=>9,Nov=>10,Dec=>11);
 my %offenders;			# key ip, value list of occurrences
@@ -55,6 +47,8 @@ if (!$opts{f})
 	if (Proc::PID::File->running());
 
     syslog("info","starting to tail ".join(" ",@{$config->{logfiles}}));
+
+    $SIG{HUP}=sub { syslog("info","reloading config"); &prepconf; };
 }
 	   
 # open all logfiles for tailing
@@ -192,3 +186,23 @@ sub logit
 	print STDERR $msg,"\n";
     }
 }
+
+# read and prep the config
+# affects $config,@cregood,@alltargets
+sub prepconf
+{
+    ($config)=YAML::Tiny::LoadFile($cffile) 
+	or die "can't open $cffile: $!\n";
+
+    @alltargets=();
+    # compile all regexps
+    @cregood=map qr/$_/, @{$config->{goodpatterns}};
+    for my $bname (keys %{$config->{blocktypes}})
+    {
+	my $thisblock=$config->{blocktypes}->{$bname};
+	$thisblock->{crebad}=[map qr/$_/, @{$thisblock->{patterns}}];
+	push @alltargets,$thisblock->{target} 
+	if (!grep($_ eq $thisblock->{target},@alltargets)); # cheap and lazy, i know
+    }
+}
+    
