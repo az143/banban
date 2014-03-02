@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-#   $Id: banban,v 1.4 2013/06/06 05:04:28 az Exp az $
+#   $Id: banban,v 1.5 2013/10/27 02:43:33 az Exp az $
 # 
 #   File:		banban
 #   Date:		01 Jun 2013 16:40:52
@@ -11,7 +11,7 @@
 use strict;
 use File::Tail;
 use Data::Dumper;
-use YAML::Tiny;
+use YAML::Syck;
 use Getopt::Std;
 use POSIX;
 use Sys::Syslog;
@@ -191,7 +191,7 @@ sub logit
 # affects $config,@cregood,@alltargets
 sub prepconf
 {
-    ($config)=YAML::Tiny::LoadFile($cffile) 
+    ($config)=YAML::Syck::LoadFile($cffile) 
 	or die "can't open $cffile: $!\n";
 
     @alltargets=();
