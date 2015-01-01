@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-#   $Id: banban,v 1.5 2013/10/27 02:43:33 az Exp az $
+#   $Id: banban,v 1.6 2014/03/02 05:58:13 az Exp az $
 # 
 #   File:		banban
 #   Date:		01 Jun 2013 16:40:52
@@ -9,7 +9,6 @@
 #	slimmed down but slightly brighter variation of fail2ban
 #
 use strict;
-use File::Tail;
 use Data::Dumper;
 use YAML::Syck;
 use Getopt::Std;
@@ -17,6 +16,8 @@ use POSIX;
 use Sys::Syslog;
 use Proc::PID::File;
 use File::Basename;
+use IO::Socket::UNIX;
+use Net::CIDR::Lite;
 
 my $cffile="/etc/banban.yml";
 my $facility="local2";
@@ -24,7 +25,7 @@ my %opts;
 
 getopts("fs",\%opts) or die "usage: $0 [-f][-s]\n-f: foreground and debug info\n-s: simulate only\n";
 
-my ($config,@cregood,@alltargets);
+my ($config,@cregood,@alltargets,$v4ignore,$v6ignore);
 &prepconf;
 
 my %mnames=(Jan=>0,Feb=>1,Mar=>2,Apr=>3,May=>4,Jun=>5,Jul=>6,Aug=>7,Sep=>8,Oct=>9,Nov=>10,Dec=>11);
@@ -46,80 +47,77 @@ if (!$opts{f})
     die basename($0)." already running, exiting!\n" 
 	if (Proc::PID::File->running());
 
-    syslog("info","starting to tail ".join(" ",@{$config->{logfiles}}));
-
+    syslog("info","starting to read from socket $config->{socket}");
     $SIG{HUP}=sub { syslog("info","reloading config"); &prepconf; };
 }
-	   
-# open all logfiles for tailing
-my @tails=map File::Tail->new(name=>$_),@{$config->{logfiles}};
 
-while (1)
+unlink($config->{socket});	# dgram unix domain socket creation fails if it exists?
+my $usock = IO::Socket::UNIX->new(Type => SOCK_DGRAM, Local => $config->{socket}) 
+    or die "cannot crete socket $config->{socket}: $!\n";
+
+ READLOOP: while (1) 
 {
-    my ($nready,$timeleft,@mustread)=File::Tail::select(undef,undef,undef,5,@tails);
-    next if (!$nready);
-
+    my $ll; 
+    my $read = sysread($usock,$ll,4096);
+    die "socket read failed: $!\n" if (!defined $read);
+    chomp $ll;
+    
     my $thisyear=(localtime(time))[5];
-    for my $fh (@mustread)
+    
+    my ($month,$day,$time,$servername,$line)=split(/\s+/,$ll,5);
+    my @tcomps=split(/:/,$time);
+    if (!$month || !$day || !$time || !@tcomps)
     {
-	READLOOP: for my $ll ($fh->read)
+	logit("ignoring dud line \"$ll\"");
+	next;
+    }
+    # first look for unblock-worthy behaviour
+    for my $re (@cregood)
+    {
+	if ($line =~ $re)
 	{
-	    chomp $ll;
-	    my ($month,$day,$time,$servername,$line)=split(/\s+/,$ll,5);
-	    my @tcomps=split(/:/,$time);
-	    if (!$month || !$day || !$time || !@tcomps)
-	    {
-		logit("ignoring dud line \"$ll\"");
-		next READLOOP;
-	    }
-	    # first look for unblock-worthy behaviour
-	    for my $re (@cregood)
-	    {
-		if ($line =~ $re)
-		{
-		    my $ip=$+{ip};
-		    next READLOOP if (ignoreip($ip));
-		    logit("unblocking ip $ip");
-		    blockunblock($ip,undef) if (!$opts{s});
-		    delete $offenders{$ip};
-		    next READLOOP;
-		}
-	    }
-	    # then check for offenses
-	    BLOCKTYPE: for my $bname (keys %{$config->{blocktypes}})
-	    {
-		for my $re (@{$config->{blocktypes}->{$bname}->{crebad}})
-		{
-		    if ($line =~ $re)
-		    {
-			my $ip=$+{ip};
-			next READLOOP if (ignoreip($ip));
-
-			my $when=POSIX::mktime((reverse @tcomps),$day,$mnames{$month},$thisyear);
-			# print "bad pattern for ip $ip on line \"$line\", at time $when\n";
-
-			$offenders{$ip}||=[];
-			push @{$offenders{$ip}},$when;
-
-			my $cutoff=time-$config->{blocktypes}->{$bname}->{interval};
-
-			my $countbad=scalar grep($_>$cutoff,@{$offenders{$ip}});
-			if ($countbad>=$config->{blocktypes}->{$bname}->{minocc})
-			{
-			    logit("ip $ip offense $countbad, blocktype $bname");
-			    blockunblock($ip,$bname) if (!$opts{s});
-			}
-			# limit mem growth, keep only last 10 hits in history
-			if (@{$offenders{$ip}}>10)
-			{
-			    $offenders{$ip}=[@{$offenders{$ip}}[-10..-1]];
-			}
-			next BLOCKTYPE;
-		    }
-		}
-	    }
+	    my $ip=$+{ip};
+	    next if (ignoreip($ip));
+	    logit("unblocking ip $ip");
+	    blockunblock($ip,undef) if (!$opts{s});
+	    delete $offenders{$ip};
+	    next;
 	}
     }
+
+    # then check for offenses
+  BLOCKTYPE: for my $bname (keys %{$config->{blocktypes}})
+  {
+      for my $re (@{$config->{blocktypes}->{$bname}->{crebad}})
+      {
+	  if ($line =~ $re)
+	  {
+	      my $ip=$+{ip};
+	      next READLOOP if (ignoreip($ip));
+	      
+	      my $when=POSIX::mktime((reverse @tcomps),$day,$mnames{$month},$thisyear);
+	      # print "bad pattern for ip $ip on line \"$line\", at time $when\n";
+	      
+	      $offenders{$ip}||=[];
+	      push @{$offenders{$ip}},$when;
+	      
+	      my $cutoff=time-$config->{blocktypes}->{$bname}->{interval};
+	      
+	      my $countbad=scalar grep($_>$cutoff,@{$offenders{$ip}});
+	      if ($countbad>=$config->{blocktypes}->{$bname}->{minocc})
+	      {
+		  logit("ip $ip offense $countbad, blocktype $bname");
+		  blockunblock($ip,$bname) if (!$opts{s});
+	      }
+	      # limit mem growth, keep only last 10 hits in history
+	      if (@{$offenders{$ip}}>10)
+	      {
+		  $offenders{$ip}=[@{$offenders{$ip}}[-10..-1]];
+	      }
+	      next BLOCKTYPE;
+	  }
+      }
+  }
 }
 exit (0);
 
@@ -153,26 +151,6 @@ sub blockunblock
     }
 }
 
-# returns 1 if ip is in ignorenets
-sub ignoreip
-{
-    my ($ip)=@_;
-    return 0 if (!$config->{ignorenets});
-
-    my @digits=split(/\./,$ip);
-    my $intip=$digits[0]*(1<<24)+$digits[1]*(1<<16)
-	+$digits[2]*(1<<8)+$digits[3];
-
-    for my $netspec (@{$config->{ignorenets}})
-    {
-	my ($net,$len)=split(m!/!,$netspec);
-	@digits=split(/\./,$net);
-	my $intmask=(0xffffffff<<(32-$len))&0xffffffff;
-	my $intnet=($digits[0]*(1<<24)+$digits[1]*(1<<16)
-		    +$digits[2]*(1<<8)+$digits[3])&$intmask;
-	return 1 if (($intip&$intmask) == $intnet);
-    }
-}
 
 sub logit
 {
@@ -204,5 +182,21 @@ sub prepconf
 	push @alltargets,$thisblock->{target} 
 	if (!grep($_ eq $thisblock->{target},@alltargets)); # cheap and lazy, i know
     }
+
+    $v4ignore = Net::CIDR::Lite->new;
+    $v6ignore = Net::CIDR::Lite->new;
+
+    for my $netblock (@{$config->{ignorenets}})
+    {
+	( $netblock =~ /:/ ? $v6ignore : $v4ignore )->add($netblock);
+    }
+}
+
+# argument: ip to check, returns 1 if in either v4 or v6 ignore list
+sub ignoreip
+{
+    my ($ip) = @_;
+
+    return ($ip =~ /:/ ? $v6ignore : $v4ignore)->find($ip);
 }
     
