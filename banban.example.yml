@@ -1,0 +1,65 @@
+# config file for banban
+# sanitized version of my personal config
+socket: /var/spool/rsyslog/banban
+
+# patterns for unblocking (from all lists)
+goodpatterns:
+  - 'sshd\[[0-9]+\]: Accepted .+ for .+ from (?<ip>[0-9a-fA-F:\.]+) port'
+  - 'cyrus/imaps?\[[0-9]+\]: login: .*\[(?<ip>[0-9a-fA-F:\.]+)\]'
+  - 'sm-mta\[[0-9]+\]: AUTH=server, relay=.*\[(?<ip>[0-9a-fA-F:\.]+)\], authid='
+
+# ips that we don't mess with, ever - both ipv4 and v6 work here
+ignorenets:
+  - 127.0.0.0/8
+  - ::1/128
+# ... and a bunch of other nets that are none of your concern :-)
+
+# which blocklist, and what parameters for adding
+# patterns must have regex with named capture group 'ip'
+blocktypes:
+
+  # full day+ block, but only after a few attempts
+  fullblock:
+    target: BLOCKER
+    minocc: 3
+    interval: 3600
+    resetconns: 1
+    patterns:
+      - 'sshd\[[0-9]+\]: Failed .+ for .+ from (?<ip>[0-9a-fA-F:\.]+)'
+      - 'sshd\[[0-9]+\]: refused connect from .+ \((?<ip>[0-9a-fA-F:\.]+)\)'
+      - 'sshd\[[0-9]+\]: Did not receive identification string from (?<ip>[0-9a-fA-F:\.]+)'
+      - 'sm-mta\[[0-9]+\]: [a-zA-Z0-9]+: AUTH failure.+, relay=.*\[(?<ip>[0-9a-fA-F:\.]+)\]( \(may be forged\))?$'
+      - 'sm-mta\[[0-9]+\]: [a-zA-Z0-9]+: ruleset=check_rcpt, arg1=.*, relay=.*\[(?<ip>[0-9a-fA-F:\.]+)\].*, reject=550 .*Relaying denied'
+      - 'cyrus/imaps?\[[0-9]+\]: badlogin: .*\[(?<ip>[0-9a-fA-F:\.]+)\]'
+      - 'named\[[0-9]+\]: client (?<ip>[0-9a-fA-F:\.]+)#\d+:.*denied$'
+
+  # full day+ block like above, but immediately
+  immediate:
+    target: BLOCKER
+    minocc: 1
+    interval: 86400              # not applicable here
+    resetconns: 1
+    patterns:
+      - 'mimedefang\[[0-9]+\]: added (?<ip>[0-9a-fA-F:\.]+) to blacklist'
+      - 'sshd\[[0-9]+\]: Bad protocol version identification .* from (?<ip>[0-9a-fA-F:\.]+)'
+      - 'sshd\[[0-9]+\]: Invalid user .* from (?<ip>[0-9a-fA-F:\.]+)'
+
+
+  # repeat offenders against the throttling
+  escalate:
+    target: BLOCKER
+    minocc: 5
+    interval: 1800
+    resetconns: 1
+    patterns: 
+      - 'sm-mta\[[0-9]+\]: ruleset=check_relay, arg1=\[(?<ip>[0-9a-fA-F:\.]+)\],.+reject=421 4.3.2 Connection rate limit exceeded.'
+  
+  # 180s brief throttling without killing existing conns
+  briefthrottle:
+    target: THROTTLE
+    minocc: 1
+    interval: 86400                # not applicable here
+    resetconns: 0
+    patterns:
+      - 'sm-mta\[[0-9]+\]: ruleset=check_relay, arg1=\[(?<ip>[0-9a-fA-F:\.]+)\],.+reject=421 4.3.2 Connection rate limit exceeded.'
+

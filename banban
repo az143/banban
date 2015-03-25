@@ -1,5 +1,4 @@
 #!/usr/bin/perl
-#   $Id: banban,v 1.6 2014/03/02 05:58:13 az Exp az $
 # 
 #   File:		banban
 #   Date:		01 Jun 2013 16:40:52
@@ -8,6 +7,7 @@
 #   Abstract:
 #	slimmed down but slightly brighter variation of fail2ban
 #
+use 5.10.0;			# for named capture groups
 use strict;
 use Data::Dumper;
 use YAML::Syck;
