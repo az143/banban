@@ -80,7 +80,7 @@ from **all** known target Xs on unblocking.
 ## copyright, license
 
 all this stuff is (c) 2013-2015 Alexander Zangerl <az@snafu.priv.at>
-and licensed under the Gnu Public License version 2.
+and licensed under the Gnu General Public License version 2.
 
 share and enjoy `:-)`
 
