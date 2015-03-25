@@ -2,7 +2,7 @@
 
 in this repository you'll find banban, a small tool that provides a
 variant and subset of [fail2ban](http://www.fail2ban.org)
-functionality that i personally consider useful, massaged and extende 
+functionality that i personally consider useful, massaged and extended
 with stuff that f2b does _not_ do. banban relies directly and solely on
 iptables' recent match, and reacts close to realtime.
 
@@ -11,7 +11,7 @@ banban is also ridiculously lean compared to f2b: 200 lines of perl,
 
 ## how it works
 
-banban listens to syslog information on a UNIX domain socket. whenever
+banban listens for syslog information on a UNIX domain socket. whenever
 it finds something that belongs to 'goodpatterns' it unblocks the
 source IP address. whenever it finds something in a variety of 'badpatterns',
 sufficiently often, it blocks the source IP address.
@@ -70,7 +70,7 @@ somewhat similar to these examples:
             --seconds 172800 -j DROP
 		# plus the same with ip6tables...
 
-these are relative to a custom chain called blacklist, which is jumped to 
+these are relative to a custom chain called blacklist, which is jumped to
 from INPUT under various circumstances. the recent names BLOCKER and THROTTLE
 correspond to the "target"s in banban's config.
 
