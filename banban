@@ -63,7 +63,8 @@ my $usock = IO::Socket::UNIX->new(Type => SOCK_DGRAM, Local => $config->{socket}
     chomp $ll;
     
     my $thisyear=(localtime(time))[5];
-    
+
+		$ll=~ s/^<\d{1,3}>//;				# rsyslog 8 includes pri with rsyslog_traditionalfileformat
     my ($month,$day,$time,$servername,$line)=split(/\s+/,$ll,5);
     my @tcomps=split(/:/,$time);
     if (!$month || !$day || !$time || !@tcomps)
