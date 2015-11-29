@@ -1,9 +1,9 @@
 #!/usr/bin/perl
-# 
+#
 #   File:		banban
 #   Date:		01 Jun 2013 16:40:52
 #   Author:		Alexander Zangerl <az@snafu.priv.at>
-# 
+#
 #   Abstract:
 #	slimmed down but slightly brighter variation of fail2ban
 #
@@ -38,30 +38,33 @@ if (!$opts{f})
     chdir '/' or die "Can't chdir to /: $!";
     open STDIN, '/dev/null'  or die "Can't read /dev/null: $!";
     open STDOUT, '>/dev/null' or die "Can't write to /dev/null: $!";
-    
+
     $SIG{__DIE__}=sub { die @_ if $^S; syslog("crit",$_[0]."\n"); };
 
     defined(my $pid = fork) or die "Can't fork: $!";
     exit if $pid;
 
-    die basename($0)." already running, exiting!\n" 
+    die basename($0)." already running, exiting!\n"
 	if (Proc::PID::File->running());
 
     syslog("info","starting to read from socket $config->{socket}");
     $SIG{HUP}=sub { syslog("info","reloading config"); &prepconf; };
 }
 
-unlink($config->{socket});	# dgram unix domain socket creation fails if it exists?
-my $usock = IO::Socket::UNIX->new(Type => SOCK_DGRAM, Local => $config->{socket}) 
-    or die "cannot crete socket $config->{socket}: $!\n";
+# dgram unix domain socket creation fails if it exists?
+unlink($config->{socket});
+my $usock = IO::Socket::UNIX->new(Type => SOCK_DGRAM,
+																	Local => $config->{socket})
+    or die "cannot create socket $config->{socket}: $!\n";
 
- READLOOP: while (1) 
+ READLOOP: while (1)
 {
-    my $ll; 
+    my $ll;
     my $read = sysread($usock,$ll,4096);
+		next if (!defined $read && $! == POSIX::EINTR);
     die "socket read failed: $!\n" if (!defined $read);
     chomp $ll;
-    
+
     my $thisyear=(localtime(time))[5];
 
 		$ll=~ s/^<\d{1,3}>//;				# rsyslog 8 includes pri with rsyslog_traditionalfileformat
@@ -95,15 +98,15 @@ my $usock = IO::Socket::UNIX->new(Type => SOCK_DGRAM, Local => $config->{socket}
 	  {
 	      my $ip=$+{ip};
 	      next READLOOP if (ignoreip($ip));
-	      
+
 	      my $when=POSIX::mktime((reverse @tcomps),$day,$mnames{$month},$thisyear);
 	      # print "bad pattern for ip $ip on line \"$line\", at time $when\n";
-	      
+
 	      $offenders{$ip}||=[];
 	      push @{$offenders{$ip}},$when;
-	      
+
 	      my $cutoff=time-$config->{blocktypes}->{$bname}->{interval};
-	      
+
 	      my $countbad=scalar grep($_>$cutoff,@{$offenders{$ip}});
 	      if ($countbad>=$config->{blocktypes}->{$bname}->{minocc})
 	      {
@@ -170,7 +173,7 @@ sub logit
 # affects $config,@cregood,@alltargets
 sub prepconf
 {
-    ($config)=YAML::Syck::LoadFile($cffile) 
+    ($config)=YAML::Syck::LoadFile($cffile)
 	or die "can't open $cffile: $!\n";
 
     @alltargets=();
@@ -180,7 +183,7 @@ sub prepconf
     {
 	my $thisblock=$config->{blocktypes}->{$bname};
 	$thisblock->{crebad}=[map qr/$_/, @{$thisblock->{patterns}}];
-	push @alltargets,$thisblock->{target} 
+	push @alltargets,$thisblock->{target}
 	if (!grep($_ eq $thisblock->{target},@alltargets)); # cheap and lazy, i know
     }
 
@@ -200,4 +203,3 @@ sub ignoreip
 
     return ($ip =~ /:/ ? $v6ignore : $v4ignore)->find($ip);
 }
-    
