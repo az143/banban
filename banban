@@ -157,6 +157,10 @@ sub blockunblock
 				open(STDERR,">/dev/null"); # less noise, please!
 				exec("/usr/sbin/conntrack","-D","-s",$ip);
 			}
+			else
+			{
+				wait();
+			}
 		}
 	}
 }
