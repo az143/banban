@@ -152,7 +152,11 @@ sub blockunblock
 		# also nix any existing connections if requested
 		if ($config->{blocktypes}->{$btype}->{resetconns})
 		{
-	    system("/usr/sbin/conntrack","-D","-s",$ip);
+			if (fork == 0)
+			{
+				open(STDERR,">/dev/null"); # less noise, please!
+				exec("/usr/sbin/conntrack","-D","-s",$ip);
+			}
 		}
 	}
 }
