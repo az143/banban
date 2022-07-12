@@ -1,13 +1,13 @@
 #!/usr/bin/perl
 #
-#   File:		banban
-#   Date:		01 Jun 2013 16:40:52
-#   Author:		Alexander Zangerl <az@snafu.priv.at>
+#   File:   banban
+#   Date:   01 Jun 2013 16:40:52
+#   Author:   Alexander Zangerl <az@snafu.priv.at>
 #
 #   Abstract:
-#	slimmed down but slightly brighter variation of fail2ban
+# slimmed down but slightly brighter variation of fail2ban
 #
-use 5.10.0;			# for named capture groups
+use 5.10.0;     # for named capture groups
 use strict;
 use Data::Dumper;
 use YAML::Syck;
@@ -29,100 +29,104 @@ my ($config,@cregood,@alltargets,$v4ignore,$v6ignore);
 &prepconf;
 
 my %mnames=(Jan=>0,Feb=>1,Mar=>2,Apr=>3,May=>4,Jun=>5,Jul=>6,Aug=>7,Sep=>8,Oct=>9,Nov=>10,Dec=>11);
-my %offenders;			# key ip, value list of occurrences
+my %offenders;      # key ip, value list of occurrences
 
 
 if (!$opts{f})
 {
-	openlog(basename($0),"pid",$facility);
-	chdir '/' or die "Can't chdir to /: $!";
-	open STDIN, '/dev/null'  or die "Can't read /dev/null: $!";
-	open STDOUT, '>/dev/null' or die "Can't write to /dev/null: $!";
+  openlog(basename($0),"pid",$facility);
+  chdir '/' or die "Can't chdir to /: $!";
+  open STDIN, '/dev/null'  or die "Can't read /dev/null: $!";
+  open STDOUT, '>/dev/null' or die "Can't write to /dev/null: $!";
 
-	$SIG{__DIE__}=sub { die @_ if $^S; syslog("crit",$_[0]."\n"); };
+  $SIG{__DIE__}=sub { die @_ if $^S; syslog("crit",$_[0]."\n"); };
 
-	defined(my $pid = fork) or die "Can't fork: $!";
-	exit if $pid;
+  defined(my $pid = fork) or die "Can't fork: $!";
+  exit if $pid;
 
-	die basename($0)." already running, exiting!\n"
-			if (Proc::PID::File->running());
+  die basename($0)." already running, exiting!\n"
+      if (Proc::PID::File->running());
 
-	syslog("info","starting to read from socket $config->{socket}");
-	$SIG{HUP}=sub { syslog("info","reloading config"); &prepconf; };
+  syslog("info","starting to read from socket $config->{socket}");
+  $SIG{HUP}=sub { syslog("info","reloading config"); &prepconf; };
 }
 
 # dgram unix domain socket creation fails if it exists?
 unlink($config->{socket});
 my $usock = IO::Socket::UNIX->new(Type => SOCK_DGRAM,
-																	Local => $config->{socket})
+                                  Local => $config->{socket})
     or die "cannot create socket $config->{socket}: $!\n";
 
 READLOOP: while (1)
 {
-	my $ll;
-	my $read = sysread($usock,$ll,4096);
-	next if (!defined $read && $! == POSIX::EINTR);
-	die "socket read failed: $!\n" if (!defined $read);
-	chomp $ll;
+  my $ll;
+  my $read = sysread($usock,$ll,4096);
+  next if (!defined $read && $! == POSIX::EINTR);
+  if (!defined $read)
+  {
+    syslog("crit","socket read failed: $!\n");
+    next;
+  }
+  chomp $ll;
 
-	my $thisyear=(localtime(time))[5];
+  my $thisyear=(localtime(time))[5];
 
-	$ll=~ s/^<\d{1,3}>//;				# rsyslog 8 includes pri with rsyslog_traditionalfileformat
-	my ($month,$day,$time,$servername,$line)=split(/\s+/,$ll,5);
-	my @tcomps=split(/:/,$time);
-	if (!$month || !$day || !$time || !@tcomps)
-	{
-		logit("ignoring dud line \"$ll\"") if ($ll !~ /banban\[$$\]/);
-		next;
-	}
-	logit("checking line \"$ll\"") if ($opts{f});
+  $ll=~ s/^<\d{1,3}>//;       # rsyslog 8 includes pri with rsyslog_traditionalfileformat
+  my ($month,$day,$time,$servername,$line)=split(/\s+/,$ll,5);
+  my @tcomps=split(/:/,$time);
+  if (!$month || !$day || !$time || !@tcomps)
+  {
+    logit("ignoring dud line \"$ll\"") if ($ll !~ /banban\[$$\]/);
+    next;
+  }
+  logit("checking line \"$ll\"") if ($opts{f});
 
-	# first look for unblock-worthy behaviour
-	for my $re (@cregood)
-	{
-		if ($line =~ $re)
-		{
-	    my $ip=$+{ip};
-	    next if (ignoreip($ip));
-	    logit("unblocking ip $ip");
-	    blockunblock($ip,undef) if (!$opts{s});
-	    delete $offenders{$ip};
-	    next;
-		}
-	}
+  # first look for unblock-worthy behaviour
+  for my $re (@cregood)
+  {
+    if ($line =~ $re)
+    {
+      my $ip=$+{ip};
+      next if (ignoreip($ip));
+      logit("unblocking ip $ip");
+      blockunblock($ip,undef) if (!$opts{s});
+      delete $offenders{$ip};
+      next;
+    }
+  }
 
-	# then check for offenses
+  # then check for offenses
  BLOCKTYPE: for my $bname (keys %{$config->{blocktypes}})
  {
-	 for my $re (@{$config->{blocktypes}->{$bname}->{crebad}})
-	 {
-		 if ($line =~ $re)
-		 {
-			 my $ip=$+{ip};
-			 next READLOOP if (ignoreip($ip));
+   for my $re (@{$config->{blocktypes}->{$bname}->{crebad}})
+   {
+     if ($line =~ $re)
+     {
+       my $ip=$+{ip};
+       next READLOOP if (ignoreip($ip));
 
-			 my $when=POSIX::mktime((reverse @tcomps),$day,$mnames{$month},$thisyear);
-			 # print "bad pattern for ip $ip on line \"$line\", at time $when\n";
+       my $when=POSIX::mktime((reverse @tcomps),$day,$mnames{$month},$thisyear);
+       # print "bad pattern for ip $ip on line \"$line\", at time $when\n";
 
-			 $offenders{$ip}||=[];
-			 push @{$offenders{$ip}},$when;
+       $offenders{$ip}||=[];
+       push @{$offenders{$ip}},$when;
 
-			 my $cutoff=time-$config->{blocktypes}->{$bname}->{interval};
+       my $cutoff=time-$config->{blocktypes}->{$bname}->{interval};
 
-			 my $countbad=scalar grep($_>$cutoff,@{$offenders{$ip}});
-			 if ($countbad>=$config->{blocktypes}->{$bname}->{minocc})
-			 {
-				 logit("ip $ip offense $countbad, blocktype $bname");
-				 blockunblock($ip,$bname) if (!$opts{s});
-			 }
-			 # limit mem growth, keep only last 10 hits in history
-			 if (@{$offenders{$ip}}>10)
-			 {
-				 $offenders{$ip}=[@{$offenders{$ip}}[-10..-1]];
-			 }
-			 next BLOCKTYPE;
-		 }
-	 }
+       my $countbad=scalar grep($_>$cutoff,@{$offenders{$ip}});
+       if ($countbad>=$config->{blocktypes}->{$bname}->{minocc})
+       {
+         logit("ip $ip offense $countbad, blocktype $bname");
+         blockunblock($ip,$bname) if (!$opts{s});
+       }
+       # limit mem growth, keep only last 10 hits in history
+       if (@{$offenders{$ip}}>10)
+       {
+         $offenders{$ip}=[@{$offenders{$ip}}[-10..-1]];
+       }
+       next BLOCKTYPE;
+     }
+   }
  }
 }
 exit (0);
@@ -130,90 +134,98 @@ exit (0);
 # blocktype undef -> unblock, otherwise block respective list and settings
 sub blockunblock
 {
-	my ($ip,$btype)=@_;
+  my ($ip,$btype)=@_;
 
-	if (!$btype)
-	{
-		for my $tname (@alltargets)
-		{
-	    my $tfn="/proc/net/xt_recent/$tname";
-	    open(F,">$tfn") or die "can't open $tfn: $!\n";
-	    print F "-$ip\n";
-	    close(F);
-		}
-	}
-	else
-	{
-		my $tfn="/proc/net/xt_recent/".$config->{blocktypes}->{$btype}->{target};
-		open(F,">$tfn") or die "can't open $tfn: $!\n";
-		print F "+$ip\n";
-		close(F);
+  if (!$btype)
+  {
+    for my $tname (@alltargets)
+    {
+      my $tfn="/proc/net/xt_recent/$tname";
+      if (!open(F,">$tfn"))
+      {
+        syslog("crit","can't open $tfn: $!");
+        return;
+      }
+      print F "-$ip\n";
+      close(F);
+    }
+  }
+  else
+  {
+    my $tfn="/proc/net/xt_recent/".$config->{blocktypes}->{$btype}->{target};
+    if (!open(F,">$tfn"))
+    {
+      syslog("crit", "can't open $tfn: $!");
+      return;
+    }
+    print F "+$ip\n";
+    close(F);
 
-		# also nix any existing connections if requested
-		if ($config->{blocktypes}->{$btype}->{resetconns})
-		{
-			if (fork == 0)
-			{
-				open(STDERR,">/dev/null"); # less noise, please!
-				exec("/usr/sbin/conntrack","-D","-s",$ip);
-			}
-			else
-			{
-				wait();
-			}
-		}
-	}
+    # also nix any existing connections if requested
+    if ($config->{blocktypes}->{$btype}->{resetconns})
+    {
+      if (fork == 0)
+      {
+        open(STDERR,">/dev/null"); # less noise, please!
+        exec("/usr/sbin/conntrack","-D","-s",$ip);
+      }
+      else
+      {
+        wait();
+      }
+    }
+  }
 }
 
 sub logit
 {
-	my ($msg)=@_;
-	if (!$opts{f})
-	{
-		syslog("info",$msg);
-	}
-	else
-	{
-		print STDERR $msg,"\n";
-	}
+  my ($msg)=@_;
+  if (!$opts{f})
+  {
+    syslog("info",$msg);
+  }
+  else
+  {
+    print STDERR $msg,"\n";
+  }
 }
 
 # read and prep the config
 # affects $config,@cregood,@alltargets
 sub prepconf
 {
-	($config)=YAML::Syck::LoadFile($cffile)
-			or die "can't open $cffile: $!\n";
+  ($config)=YAML::Syck::LoadFile($cffile)
+      or die "can't open $cffile: $!\n";
 
-	@alltargets=();
-	# compile all regexps
-	@cregood=map qr/$_/, @{$config->{goodpatterns}};
-	for my $bname (keys %{$config->{blocktypes}})
-	{
-		my $thisblock=$config->{blocktypes}->{$bname};
-		$thisblock->{crebad}=[map qr/$_/, @{$thisblock->{patterns}}];
-		push @alltargets,$thisblock->{target}
-		if (!grep($_ eq $thisblock->{target},@alltargets)); # cheap and lazy, i know
-	}
+  @alltargets=();
+  # compile all regexps
+  @cregood=map qr/$_/, @{$config->{goodpatterns}};
+  for my $bname (keys %{$config->{blocktypes}})
+  {
+    my $thisblock=$config->{blocktypes}->{$bname};
+    $thisblock->{crebad}=[map qr/$_/, @{$thisblock->{patterns}}];
+    push @alltargets,$thisblock->{target}
+    if (!grep($_ eq $thisblock->{target},@alltargets)); # cheap and lazy, i know
+  }
 
-	$v4ignore = Net::CIDR::Lite->new;
-	$v6ignore = Net::CIDR::Lite->new;
+  $v4ignore = Net::CIDR::Lite->new;
+  $v6ignore = Net::CIDR::Lite->new;
 
-	for my $netblock (@{$config->{ignorenets}})
-	{
-		( $netblock =~ /:/ ? $v6ignore : $v4ignore )->add($netblock);
-	}
+  for my $netblock (@{$config->{ignorenets}})
+  {
+    ( $netblock =~ /:/ ? $v6ignore : $v4ignore )->add($netblock);
+  }
 
-	if ($opts{f})
-	{
-		logit("read config: ".Dumper($config->{blocktypes}));
-	}
+  if ($opts{f})
+  {
+    logit("read config: ".Dumper($config->{blocktypes}));
+  }
 }
 
 # argument: ip to check, returns 1 if in either v4 or v6 ignore list
 sub ignoreip
 {
-	my ($ip) = @_;
+  my ($ip) = @_;
 
-	return ($ip =~ /:/ ? $v6ignore : $v4ignore)->find($ip);
+  return ($ip =~ /:/ ? $v6ignore : $v4ignore)->find($ip);
 }
